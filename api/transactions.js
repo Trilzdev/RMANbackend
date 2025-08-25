@@ -1,63 +1,48 @@
-// api/transactions.js
+import fs from "fs";
+import path from "path";
+
+function getTransactions() {
+  const dataPath = path.join(process.cwd(), "merged.json");
+  if (!fs.existsSync(dataPath)) return [];
+  return JSON.parse(fs.readFileSync(dataPath, "utf-8"));
+}
+
 export default function handler(req, res) {
   // Enable CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "GET") return res.status(405).json({ message: "Method not allowed" });
 
-  // Sample transaction data
-  const transactions = [
-    { unqcode: "TX1001", customer: "Alice", date: "2025-08-24", amount: 1000 },
-    { unqcode: "TX1002", customer: "Bob", date: "2025-08-24", amount: 500 },
-    { unqcode: "TX1003", customer: "Alice", date: "2025-08-23", amount: 200 }
-  ];
+  const { type, params } = req.query;
+  const transactions = getTransactions();
 
-  const urlPath = req.url.replace(/^\/api\/transactions\/?/, "").replace(/\/$/, "");
-  const parts = urlPath.split("/"); // e.g., ["code","TX1001"]
-
-  if (!parts[0] || parts[0] === "") {
-    return res.status(200).json(transactions);
+  if (type === "code" && params?.[0]) {
+    const result = transactions.find(t => t.unqcode === params[0]);
+    return result ? res.status(200).json(result) : res.status(404).json({ message: "Transaction not found" });
   }
 
-  const type = parts[0];
-  const param1 = parts[1];
-  const param2 = parts[2];
-
-  switch (type) {
-    case "code":
-      const byCode = transactions.find(t => t.unqcode === param1);
-      return byCode
-        ? res.status(200).json(byCode)
-        : res.status(404).json({ message: "Transaction not found" });
-
-    case "date":
-      const byDate = transactions.filter(t => t.date === param1);
-      return byDate.length
-        ? res.status(200).json(byDate)
-        : res.status(404).json({ message: "No transactions found for this date" });
-
-    case "range":
-      const start = new Date(param1);
-      const end = new Date(param2);
-      const inRange = transactions.filter(t => {
-        const tDate = new Date(t.date);
-        return tDate >= start && tDate <= end;
-      });
-      return inRange.length
-        ? res.status(200).json(inRange)
-        : res.status(404).json({ message: "No transactions found in this date range" });
-
-    case "customer":
-      const name = param1.toLowerCase();
-      const byCustomer = transactions.filter(t =>
-        t.customer.toLowerCase() === name
-      );
-      return byCustomer.length
-        ? res.status(200).json(byCustomer)
-        : res.status(404).json({ message: "No transactions found for this customer" });
-
-    default:
-      return res.status(404).json({ message: "Endpoint not found" });
+  if (type === "date" && params?.[0]) {
+    const result = transactions.filter(t => t.date === params[0]);
+    return result.length ? res.status(200).json(result) : res.status(404).json({ message: "No transactions found for this date" });
   }
+
+  if (type === "range" && params?.[0] && params?.[1]) {
+    const startDate = new Date(params[0]);
+    const endDate = new Date(params[1]);
+    const result = transactions.filter(t => {
+      const tDate = new Date(t.date);
+      return tDate >= startDate && tDate <= endDate;
+    });
+    return result.length ? res.status(200).json(result) : res.status(404).json({ message: "No transactions found in this date range" });
+  }
+
+  if (type === "customer" && params?.[0]) {
+    const name = params[0].toLowerCase().trim();
+    const result = transactions.filter(t => t.customer.toLowerCase().includes(name));
+    return result.length ? res.status(200).json(result) : res.status(404).json({ message: "No transactions found for this customer" });
+  }
+
+  return res.status(404).json({ message: "Endpoint not found" });
 }
