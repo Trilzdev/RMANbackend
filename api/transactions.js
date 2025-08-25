@@ -1,79 +1,53 @@
+import express from "express";
+import cors from "cors";
 import fs from "fs";
 import path from "path";
+import serverless from "serverless-http";
 
-function getTransactions() {
-  const dataPath = path.join(process.cwd(), "merged.json");
-  if (!fs.existsSync(dataPath)) return [];
-  return JSON.parse(fs.readFileSync(dataPath, "utf-8"));
-}
+const app = express();
+app.use(cors());
 
-export default function handler(req, res) {
-  const transactions = getTransactions();
-  const { method, url } = req;
+// Load JSON
+const dataPath = path.join(process.cwd(), "merged.json");
+const transactions = fs.existsSync(dataPath)
+  ? JSON.parse(fs.readFileSync(dataPath, "utf-8"))
+  : [];
 
-  // Enable CORS
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (method === "OPTIONS") return res.status(200).end();
-  if (method !== "GET") return res.status(405).json({ message: "Method not allowed" });
+// Routes
+app.get("/api/transactions", (req, res) => {
+  res.json(transactions);
+});
 
-  // Split URL reliably
-  const parts = url.split("/").filter(Boolean); 
-  // ["api","transactions","date","2025-08-24"]
+app.get("/api/transactions/code/:unqcode", (req, res) => {
+  const result = transactions.find(t => t.unqcode === req.params.unqcode);
+  result ? res.json(result) : res.status(404).json({ message: "Transaction not found" });
+});
 
-  // GET /api/transactions → all transactions
-  if (parts.length === 2 && parts[0] === "api" && parts[1] === "transactions") {
-    return res.status(200).json(transactions);
-  }
+app.get("/api/transactions/date/:date", (req, res) => {
+  const dateParam = req.params.date;
+  const result = transactions.filter(t => t.date.startsWith(dateParam)); // works if date includes timestamp
+  result.length ? res.json(result) : res.status(404).json({ message: "No transactions found for this date" });
+});
 
-  const type = parts[2];       // "code", "date", "range", "customer"
-  const param1 = parts[3];     // first param
-  const param2 = parts[4];     // second param (for range)
+app.get("/api/transactions/range/:start/:end", (req, res) => {
+  const { start, end } = req.params;
+  const startDate = new Date(start);
+  const endDate = new Date(end);
 
-  switch (type) {
-    case "code":
-      if (!param1) return res.status(400).json({ message: "Missing code" });
-      const byCode = transactions.find(t => t.unqcode === param1);
-      return byCode
-        ? res.status(200).json(byCode)
-        : res.status(404).json({ message: "Transaction not found" });
+  const result = transactions.filter(t => {
+    const tDate = new Date(t.date);
+    const day = new Date(tDate.toISOString().slice(0, 10));
+    return day >= startDate && day <= endDate;
+  });
 
-    case "date":
-      if (!param1) return res.status(400).json({ message: "Missing date" });
-      const byDate = transactions.filter(t => {
-        const tDate = new Date(t.date);
-        const pDate = new Date(param1);
-        return tDate.toISOString().slice(0, 10) === pDate.toISOString().slice(0, 10);
-      });
-      return byDate.length
-        ? res.status(200).json(byDate)
-        : res.status(404).json({ message: "No transactions found for this date" });
+  result.length ? res.json(result) : res.status(404).json({ message: "No transactions found in this date range" });
+});
 
-    case "range":
-      if (!param1 || !param2) return res.status(400).json({ message: "Missing start or end date" });
-      const start = new Date(param1);
-      const end = new Date(param2);
-      const inRange = transactions.filter(t => {
-        const tDate = new Date(t.date);
-        const day = new Date(tDate.toISOString().slice(0, 10));
-        return day >= start && day <= end;
-      });
-      return inRange.length
-        ? res.status(200).json(inRange)
-        : res.status(404).json({ message: "No transactions found in this date range" });
+app.get("/api/transactions/customer/:name", (req, res) => {
+  const name = req.params.name.toLowerCase();
+  const result = transactions.filter(t => t.customer.toLowerCase().includes(name));
+  result.length ? res.json(result) : res.status(404).json({ message: "No transactions found for this customer" });
+});
 
-    case "customer":
-      if (!param1) return res.status(400).json({ message: "Missing customer name" });
-      const name = param1.toLowerCase().trim();
-      const byCustomer = transactions.filter(t =>
-        t.customer.toLowerCase().includes(name)
-      );
-      return byCustomer.length
-        ? res.status(200).json(byCustomer)
-        : res.status(404).json({ message: "No transactions found for this customer" });
-
-    default:
-      return res.status(404).json({ message: "Endpoint not found" });
-  }
-}
+// Export handler for Vercel
+export const handler = serverless(app);
