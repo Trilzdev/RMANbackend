@@ -22,7 +22,7 @@ export default function handler(req, res) {
     return res.status(405).json({ message: "Method not allowed" });
   }
 
-  // Remove /api/transactions prefix and leading slash
+  // Remove /api/transactions prefix and trailing slash
   const pathPart = url.replace(/^\/api\/transactions\/?/, "").replace(/\/$/, "");
   const parts = pathPart.split("/"); // ["code", "123"] or ["range", "2025-08-01", "2025-08-24"]
 
@@ -45,7 +45,11 @@ export default function handler(req, res) {
 
     case "date":
       if (!param1) return res.status(400).json({ message: "Missing date" });
-      const byDate = transactions.filter(t => t.date === param1);
+      const byDate = transactions.filter(t => {
+        const tDate = new Date(t.date);
+        const paramDate = new Date(param1);
+        return tDate.toISOString().slice(0, 10) === paramDate.toISOString().slice(0, 10);
+      });
       return byDate.length
         ? res.status(200).json(byDate)
         : res.status(404).json({ message: "No transactions found for this date" });
@@ -57,7 +61,8 @@ export default function handler(req, res) {
       const end = new Date(param2);
       const inRange = transactions.filter(t => {
         const tDate = new Date(t.date);
-        return tDate >= start && tDate <= end;
+        const tDay = new Date(tDate.toISOString().slice(0, 10));
+        return tDay >= start && tDay <= end;
       });
       return inRange.length
         ? res.status(200).json(inRange)
