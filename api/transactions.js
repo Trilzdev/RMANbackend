@@ -2,6 +2,16 @@ import fs from "fs";
 import path from "path";
 
 export default function handler(req, res) {
+  // ✅ Allow CORS for all origins (for development)
+  res.setHeader("Access-Control-Allow-Origin", "*"); 
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  // Handle preflight request
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
   const dataPath = path.join(process.cwd(), "merged.json");
   const rawData = fs.readFileSync(dataPath);
   const transactions = JSON.parse(rawData);
