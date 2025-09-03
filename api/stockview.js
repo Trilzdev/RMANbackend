@@ -22,6 +22,16 @@ async function connectToMongo() {
 }
 
 export default async function handler(req, res) {
+  // ✅ Add CORS headers
+  res.setHeader("Access-Control-Allow-Origin", "*"); // replace '*' with your frontend URL in production
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  // ✅ Handle preflight requests
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -29,7 +39,7 @@ export default async function handler(req, res) {
   try {
     const { period, startPeriod, endPeriod } = req.query;
 
-    if (!period && !(startPeriod && endPeriod)) {git -v 
+    if (!period && !(startPeriod && endPeriod)) {
       return res.status(400).json({
         error:
           "Please provide either ?period=YYYY-MM or both ?startPeriod=YYYY-MM&endPeriod=YYYY-MM",
