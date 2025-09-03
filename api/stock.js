@@ -1,3 +1,25 @@
+export const config = {
+  runtime: "nodejs"
+};
+
+import { MongoClient } from "mongodb";
+
+const mongoUri = process.env.MONGO_URI;
+const dbName = "rman";
+const collectionName = "stock";
+
+let cachedClient = null;
+
+async function connectToMongo() {
+  if (cachedClient && cachedClient.isConnected && cachedClient.isConnected()) {
+    return cachedClient;
+  }
+  const client = new MongoClient(mongoUri);
+  await client.connect();
+  cachedClient = client;
+  return client;
+}
+
 export default async function handler(req, res) {
   // CORS headers
   res.setHeader("Access-Control-Allow-Origin", "*");
