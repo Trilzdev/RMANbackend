@@ -34,7 +34,10 @@ export default async function handler(req, res) {
     const collection = db.collection(collectionName);
 
     // Only fetch PART_NO and DESCRIPTION fields
-    const cursor = collection.find({}, { projection: { PART_NO: 1, DESC: 1, _id: 0 } });
+    const cursor = collection.find(
+      {},
+      { projection: { PART_NO: 1, DESC: 1, _id: 0 } }
+    ).sort({ DESC: 1 }); // 1 = ascending, -1 = descending
     const list = await cursor.toArray();
 
     if (!list || list.length === 0) {
