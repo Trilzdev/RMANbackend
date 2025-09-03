@@ -1,76 +1,71 @@
 // File: api/stockhistory.js
-import mongoose from "mongoose";
+import { MongoClient } from "mongodb";
+import dotenv from "dotenv";
 
-// ---------------------
-// DB Connection (cached for serverless)
-// ---------------------
-let conn = null;
-async function connectDB() {
-  if (conn) return conn;
-  conn = await mongoose.connect(process.env.MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  });
-  return conn;
+dotenv.config();
+
+export const config = {
+  runtime: "nodejs",
+};
+
+const mongoUri = process.env.MONGO_URI;
+const dbName = "rman";
+
+let client;
+
+async function connectToMongo() {
+  if (!client) {
+    client = new MongoClient(mongoUri);
+    await client.connect();
+  }
+  return client;
 }
 
-// ---------------------
-// Schema
-// ---------------------
-const StockHistorySchema = new mongoose.Schema({}, { strict: false });
-const StockHistory =
-  mongoose.models.StockHistory ||
-  mongoose.model("StockHistory", StockHistorySchema, "stockhistory");
-
-// ---------------------
-// API Handler
-// ---------------------
 export default async function handler(req, res) {
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
   try {
-    const { period, periodStart, periodEnd, group } = req.query;
+    const { period, startPeriod, endPeriod } = req.query;
 
-    // Require either period or periodStart + periodEnd
-    if (!period && (!periodStart || !periodEnd)) {
-      return res
-        .status(400)
-        .json({ error: "Please provide either period or periodStart & periodEnd" });
+    if (!period && !(startPeriod && endPeriod)) {git -v 
+      return res.status(400).json({
+        error:
+          "Please provide either ?period=YYYY-MM or both ?startPeriod=YYYY-MM&endPeriod=YYYY-MM",
+      });
     }
 
-    await connectDB();
-
-    // Normalize inputs: ensure YYYY-MM format
     function normalizeYYYYMM(str) {
       if (!str) return null;
       const [year, month] = str.split("-");
-      const mm = month ? month.padStart(2, "0") : "01";
-      return `${year}-${mm}`;
+      return `${year}-${month.padStart(2, "0")}`;
     }
 
-    const match = {};
+    let match = {};
     if (period) {
       match.PERIOD_ISO = normalizeYYYYMM(period);
     } else {
       match.PERIOD_ISO = {
-        $gte: normalizeYYYYMM(periodStart),
-        $lte: normalizeYYYYMM(periodEnd),
+        $gte: normalizeYYYYMM(startPeriod),
+        $lte: normalizeYYYYMM(endPeriod),
       };
     }
 
-    if (group) match.GROUP_NAME = group;
+    const conn = await connectToMongo();
+    const db = conn.db(dbName);
+    const collection = db.collection("stockhistory");
 
-    // Aggregation pipeline
-    const data = await StockHistory.aggregate([
+    const pipeline = [
       { $match: match },
-
-      // Compute unitCost and soldCost per document
       {
         $addFields: {
           unitCost: {
-            $cond: [{ $eq: ["$QTY_BUY", 0] }, 0, { $divide: ["$BUY", "$QTY_BUY"] }],
+            $cond: [
+              { $eq: ["$QTY_BUY", 0] },
+              0,
+              { $divide: ["$BUY", "$QTY_BUY"] },
+            ],
           },
           soldCost: {
             $cond: [
@@ -81,8 +76,6 @@ export default async function handler(req, res) {
           },
         },
       },
-
-      // Group by GROUP_NAME
       {
         $group: {
           _id: "$GROUP_NAME",
@@ -94,11 +87,11 @@ export default async function handler(req, res) {
           totalProfit: { $sum: { $subtract: ["$SOLD", "$soldCost"] } },
         },
       },
-
       { $sort: { _id: 1 } },
-    ]);
+    ];
 
-    // Compute grand totals
+    const data = await collection.aggregate(pipeline).toArray();
+
     const grandTotals = data.reduce(
       (acc, g) => {
         acc.qtySold += g.totalQtySold;
@@ -114,6 +107,8 @@ export default async function handler(req, res) {
     res.status(200).json({ groups: data, grandTotals });
   } catch (err) {
     console.error("Error fetching stock history:", err);
-    res.status(500).json({ error: "Internal server error" });
+    res
+      .status(500)
+      .json({ error: "Internal server error", details: err.message });
   }
 }
