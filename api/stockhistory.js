@@ -1,124 +1,74 @@
-export const config = {
-    runtime: "nodejs"
-};
-
 import { MongoClient } from "mongodb";
 
 const mongoUri = process.env.MONGO_URI;
 const dbName = "rman";
-const collectionName = "stockhistory"; // <-- stock history collection
+const collectionName = "stockhistory";
 
 let cachedClient = null;
-
 async function connectToMongo() {
-    if (cachedClient && cachedClient.topology && cachedClient.topology.isConnected()) {
-        return cachedClient;
-    }
-    const client = new MongoClient(mongoUri);
-    await client.connect();
-    cachedClient = client;
-    return client;
+  if (cachedClient && cachedClient.topology?.isConnected()) return cachedClient;
+  const client = new MongoClient(mongoUri);
+  await client.connect();
+  cachedClient = client;
+  return client;
 }
 
 export default async function handler(req, res) {
-    // --- CORS ---
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    if (req.method === "OPTIONS") return res.status(200).end();
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") return res.status(200).end();
 
-    const { period } = req.query || {};
+  const period = req.query.period;
+  if (!period) return res.status(400).json({ error: "period is required (e.g. 2022-07)" });
 
-    if (!period) {
-        return res.status(400).json({
-            message: "Missing required period query parameter (e.g. ?period=2022-07)"
-        });
-    }
+  try {
+    const client = await connectToMongo();
+    const db = client.db(dbName);
+    const collection = db.collection(collectionName);
 
-    try {
-        const client = await connectToMongo();
-        const db = client.db(dbName);
-        const collection = db.collection(collectionName);
+    // Try matching both PERIOD_ISO and PERIOD
+    const pipeline = [
+      {
+        $match: {
+          $or: [
+            { PERIOD_ISO: period },
+            { PERIOD: period.replace("-", "") }
+          ]
+        }
+      },
+      {
+        $group: {
+          _id: "$GROUP_NAME",
+          items: { $push: "$$ROOT" },
+          totalQtySold: { $sum: "$QTY_SOLD" },
+          totalQtyBuy: { $sum: "$QTY_BUY" },
+          totalBuy: { $sum: "$BUY" },
+          totalSold: { $sum: "$SOLD" },
+          totalProfit: { $sum: { $subtract: ["$SOLD", "$BUY"] } }
+        }
+      },
+      { $sort: { _id: 1 } }
+    ];
 
-        // --- Aggregation Pipeline ---
-        const pipeline = [
-            // 0. Filter by period
-            {
-                $match: {
-                    PERIOD: period      // <-- adjust field name if different
-                }
-            },
-            // 1. Compute per-item totals
-            {
-                $group: {
-                    _id: {
-                        groupName: "$GROUP_NAME",  // adjust field name to your schema
-                        partNo: "$PART_NO",
-                        desc: "$DESC"
-                    },
-                    qtySold: { $sum: "$QTY_SOLD" },
-                    qtyBuy: { $sum: "$QTY_BUY" },
-                    totalBuy: { $sum: "$TOTAL_BUY" },
-                    totalSold: { $sum: "$TOTAL_SOLD" }
-                }
-            },
-            // 2. Calculate profit at item level
-            {
-                $addFields: {
-                    profit: { $subtract: ["$totalSold", "$totalBuy"] }
-                }
-            },
-            // 3. Regroup by groupName to build nested items array
-            {
-                $group: {
-                    _id: "$_id.groupName",
-                    items: {
-                        $push: {
-                            PART_NO: "$_id.partNo",
-                            DESC: "$_id.desc",
-                            itemTotals: {
-                                qtySold: "$qtySold",
-                                qtyBuy: "$qtyBuy",
-                                buy: "$totalBuy",
-                                sold: "$totalSold",
-                                profit: "$profit"
-                            }
-                        }
-                    },
-                    groupQtySold: { $sum: "$qtySold" },
-                    groupQtyBuy: { $sum: "$qtyBuy" },
-                    groupTotalBuy: { $sum: "$totalBuy" },
-                    groupTotalSold: { $sum: "$totalSold" }
-                }
-            },
-            // 4. Add profit at group level
-            {
-                $addFields: {
-                    groupTotals: {
-                        totalQtySold: "$groupQtySold",
-                        totalQtyBuy: "$groupQtyBuy",
-                        totalBuy: "$groupTotalBuy",
-                        totalSold: "$groupTotalSold",
-                        totalProfit: { $subtract: ["$groupTotalSold", "$groupTotalBuy"] }
-                    }
-                }
-            },
-            // 5. Format final fields
-            {
-                $project: {
-                    _id: 0,
-                    groupName: "$_id",
-                    groupTotals: 1,
-                    items: 1
-                }
-            }
-        ];
+    const data = await collection.aggregate(pipeline).toArray();
 
-        const groupedData = await collection.aggregate(pipeline).toArray();
+    // Compute grand totals
+    const grandTotals = data.reduce(
+      (acc, g) => {
+        acc.totalQtySold += g.totalQtySold;
+        acc.totalQtyBuy += g.totalQtyBuy;
+        acc.totalBuy += g.totalBuy;
+        acc.totalSold += g.totalSold;
+        acc.totalProfit += g.totalProfit;
+        return acc;
+      },
+      { totalQtySold: 0, totalQtyBuy: 0, totalBuy: 0, totalSold: 0, totalProfit: 0 }
+    );
 
-        return res.status(200).json(groupedData);
-    } catch (err) {
-        console.error("Stock history server error:", err);
-        return res.status(500).json({ message: "Server error", error: err.message });
-    }
+    res.status(200).json({ period, groups: data, grandTotals });
+  } catch (err) {
+    console.error("Error fetching stock history:", err);
+    res.status(500).json({ error: "Internal server error", details: err.message });
+  }
 }
